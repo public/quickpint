@@ -1,10 +1,25 @@
 use pyo3::exceptions::PyValueError;
+use pyo3::ffi::PyFloat_Type;
+use pyo3::ffi::PyNumber_Absolute;
+use pyo3::ffi::PyNumber_Add;
+use pyo3::ffi::PyNumber_Multiply;
+use pyo3::ffi::PyNumber_Negative;
+use pyo3::ffi::PyNumber_Positive;
+use pyo3::ffi::PyNumber_Power;
+use pyo3::ffi::PyNumber_Subtract;
+use pyo3::ffi::PyNumber_TrueDivide;
+use pyo3::ffi::Py_None;
 use pyo3::prelude::*;
+use pyo3::types::PyFloat;
 use pyo3::types::PyList;
+use pyo3::types::PyString;
+use pyo3::types::PyTuple;
 use pyo3::wrap_pyfunction;
+use pyo3::AsPyPointer;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::fmt;
+use std::u8;
 
 #[pyclass]
 struct EvalTreeNode {
@@ -22,7 +37,7 @@ impl fmt::Display for EvalTreeNode {
                         f,
                         "({comps})",
                         comps = match &self.operator {
-                            Some(op) => vec![l.to_string(), op.value.clone(), r.to_string()],
+                            Some(op) => vec![l.to_string(), op.string.clone(), r.to_string()],
                             None => vec![l.to_string(), r.to_string()],
                         }
                         .join(" ")
@@ -34,8 +49,8 @@ impl fmt::Display for EvalTreeNode {
             None if self.operator.is_some() => {
                 let op = self.operator.as_ref().unwrap();
                 let comps = match &self.left {
-                    Some(l) => vec![op.value.clone(), l.to_string()],
-                    None => vec![op.value.clone()],
+                    Some(l) => vec![op.string.clone(), l.to_string()],
+                    None => vec![op.string.clone()],
                 };
 
                 return write!(f, "{comps}", comps = comps.join(" "));
@@ -43,7 +58,7 @@ impl fmt::Display for EvalTreeNode {
 
             _ => {
                 let op = self.operator.as_ref().unwrap();
-                return write!(f, "{value}", value = op.value.clone());
+                return write!(f, "{value}", value = op.string.clone());
             }
         }
     }
@@ -51,19 +66,83 @@ impl fmt::Display for EvalTreeNode {
 
 #[pymethods]
 impl EvalTreeNode {
-    fn evaluate(&self, callback: PyObject) -> PyResult<()> {
-        Ok(())
+    fn evaluate(&self, py: Python, py_callback: &PyAny) -> PyResult<PyObject> {
+        return match self {
+            EvalTreeNode {
+                left: Some(l),
+                operator: Some(op),
+                right: Some(r),
+            } => op.binary(
+                py,
+                l.evaluate(py, py_callback)?.into(),
+                r.evaluate(py, py_callback)?.into(),
+            ),
+            EvalTreeNode {
+                left: Some(l),
+                operator: Some(op),
+                right: _,
+            } => op.unary(py, l.evaluate(py, py_callback)?.into()),
+            EvalTreeNode {
+                left: _,
+                operator: Some(op),
+                right: _,
+            } => {
+                let args = PyTuple::new(py, &[op.original.as_ref(py)]);
+                Ok(py_callback.call1(args)?.into())
+            }
+            _ => Err(PyValueError::new_err("unable to evaluate tree")),
+        };
     }
 }
 
+#[derive(Clone)]
 struct Token {
     type_id: TokenType,
-    value: String,
+    string: String,
+    original: PyObject,
+}
+
+impl Token {
+    fn binary(&self, py: Python, left: PyObject, right: PyObject) -> PyResult<PyObject> {
+        let left_ptr = left.as_ptr();
+        let right_ptr = right.as_ptr();
+
+        unsafe {
+            let none_ptr = Py_None();
+
+            Ok(PyObject::from_owned_ptr(
+                py,
+                match self.string.as_str() {
+                    "**" => PyNumber_Power(left_ptr, right_ptr, none_ptr),
+                    "*" | "" => PyNumber_Multiply(left_ptr, right_ptr),
+                    "/" => PyNumber_TrueDivide(left_ptr, right_ptr),
+                    "+" => PyNumber_Add(left_ptr, right_ptr),
+                    "-" => PyNumber_Subtract(left_ptr, right_ptr),
+                    _ => panic!("unknown binary op"),
+                },
+            ))
+        }
+    }
+
+    fn unary(&self, py: Python, left: PyObject) -> PyResult<PyObject> {
+        let left_ptr = left.as_ptr();
+
+        unsafe {
+            Ok(PyObject::from_owned_ptr(
+                py,
+                match self.string.as_str() {
+                    "+" => PyNumber_Positive(left_ptr),
+                    "-" => PyNumber_Negative(left_ptr),
+                    _ => panic!("unknown unary op"),
+                },
+            ))
+        }
+    }
 }
 
 struct ParseStep {
     right: Box<EvalTreeNode>,
-    index: usize,
+    index: isize,
 }
 
 fn op_priority(op: &str) -> i16 {
@@ -76,6 +155,7 @@ fn op_priority(op: &str) -> i16 {
     }
 }
 
+#[derive(Copy, Clone)]
 enum TokenType {
     OP = 54,
     NUMBER = 2,
@@ -99,9 +179,9 @@ impl TryFrom<i32> for TokenType {
 }
 
 fn parse_tokens(
-    _py: Python,
-    tokens: &PyList,
-    mut index: usize,
+    py: Python,
+    tokens: &Vec<Token>,
+    mut index: isize,
     depth: i64,
     prev_op: Option<&str>,
 ) -> PyResult<ParseStep> {
@@ -112,26 +192,13 @@ fn parse_tokens(
 
     let mut result: Option<Box<EvalTreeNode>> = None;
 
-    while index < tokens.len() {
-        let py_token = tokens.get_item(index.try_into()?);
+    let len_tokens = tokens.len() as isize;
 
-        println!(
-            "index={index} token={token} result={result}",
-            index = index,
-            token = py_token,
-            result = result.is_some()
-        );
-
-        let type_id: i32 = py_token.get_item(0)?.extract()?;
-        let value: String = py_token.get_item(1)?.extract()?;
-
-        let token = Token {
-            type_id: TokenType::try_from(type_id)?,
-            value: value,
-        };
+    while index < len_tokens {
+        let token = &tokens[index as usize];
 
         match token.type_id {
-            TokenType::OP => match token.value.as_str() {
+            TokenType::OP => match token.string.as_str() {
                 ")" => match prev_op {
                     None => return Err(PyValueError::new_err("unopened parenthesis")),
                     Some("(") => {
@@ -149,11 +216,10 @@ fn parse_tokens(
                 },
 
                 "(" => {
-                    let step = parse_tokens(_py, tokens, index + 1, 0, Some(token.value.as_str()))?;
+                    let step = parse_tokens(py, tokens, index + 1, 0, Some(token.string.as_str()))?;
                     index = step.index;
 
-                    let last_token_value: &str =
-                        tokens.get_item(index.try_into()?).get_item(1)?.extract()?;
+                    let last_token_value: &str = tokens[index as usize].string.as_str();
 
                     if last_token_value != ")" {
                         return Err(PyValueError::new_err("weird exit from parenthesis"));
@@ -171,10 +237,12 @@ fn parse_tokens(
                 }
 
                 _ => {
-                    let op_priority = op_priority(token.value.as_str());
+                    let op_priority = op_priority(token.string.as_str());
 
                     if result.is_some() {
-                        if op_priority < prev_op_priority && token.value != "**" && token.value != "^"
+                        if op_priority < prev_op_priority
+                            && token.string != "**"
+                            && token.string != "^"
                         {
                             return Ok(ParseStep {
                                 right: result.unwrap(),
@@ -182,26 +250,26 @@ fn parse_tokens(
                             });
                         } else {
                             let step = parse_tokens(
-                                _py,
+                                py,
                                 tokens,
                                 index + 1,
                                 depth + 1,
-                                Some(token.value.as_str()),
+                                Some(token.string.as_str()),
                             )?;
-                            println!("OP {op}", op = token.value);
+
                             result = Some(Box::new(EvalTreeNode {
                                 left: result,
-                                operator: Some(token),
+                                operator: Some(token.clone()),
                                 right: Some(step.right),
                             }));
                             index = step.index;
                         }
                     } else {
-                        let step = parse_tokens(_py, tokens, index + 1, depth + 1, Some("unary"))?;
+                        let step = parse_tokens(py, tokens, index + 1, depth + 1, Some("unary"))?;
 
                         result = Some(Box::new(EvalTreeNode {
                             left: Some(step.right),
-                            operator: Some(token),
+                            operator: Some(token.clone()),
                             right: None,
                         }));
                         index = step.index;
@@ -217,7 +285,7 @@ fn parse_tokens(
                             index: index - 1,
                         });
                     } else {
-                        let step = parse_tokens(_py, tokens, index, depth + 1, Some(""))?;
+                        let step = parse_tokens(py, tokens, index, depth + 1, Some(""))?;
 
                         result = Some(Box::new(EvalTreeNode {
                             left: Some(tree),
@@ -230,7 +298,7 @@ fn parse_tokens(
                 None => {
                     result = Some(Box::new(EvalTreeNode {
                         left: None,
-                        operator: Some(token),
+                        operator: Some(token.clone()),
                         right: None,
                     }))
                 }
@@ -267,8 +335,6 @@ fn parse_tokens(
 
     let done = result.unwrap();
 
-    println!("result={done}", done = done);
-
     return Ok(ParseStep {
         right: done,
         index: index,
@@ -276,10 +342,24 @@ fn parse_tokens(
 }
 
 #[pyfunction]
-fn build_eval_tree(_py: Python, tokens: &PyList) -> PyResult<EvalTreeNode> {
-    println!("build_eval_tree");
+fn build_eval_tree(py: Python, py_tokens: &PyList) -> PyResult<EvalTreeNode> {
+    let mut tokens = Vec::new();
+    tokens.reserve(py_tokens.len());
 
-    return Ok(*parse_tokens(_py, tokens, 0, 0, None)?.right);
+    for py_token in py_tokens {
+        let type_id: i32 = py_token.get_item(0)?.extract()?;
+        let value: String = py_token.get_item(1)?.extract()?;
+
+        let token = Token {
+            type_id: TokenType::try_from(type_id)?,
+            string: value,
+            original: py_token.to_object(py),
+        };
+
+        tokens.push(token);
+    }
+
+    return Ok(*parse_tokens(py, &tokens, 0, 0, None)?.right);
 }
 
 #[pymodule]
