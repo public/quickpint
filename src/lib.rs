@@ -19,6 +19,7 @@ use pyo3::AsPyPointer;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::fmt;
+use std::ptr::null;
 use std::u8;
 
 #[pyclass]
@@ -107,35 +108,40 @@ impl Token {
         let left_ptr = left.as_ptr();
         let right_ptr = right.as_ptr();
 
+        println!(
+            "binop: {left} {op} {right}",
+            left = left,
+            op = self.string,
+            right = right
+        );
+
         unsafe {
             let none_ptr = Py_None();
 
-            Ok(PyObject::from_owned_ptr(
-                py,
-                match self.string.as_str() {
-                    "**" => PyNumber_Power(left_ptr, right_ptr, none_ptr),
-                    "*" | "" => PyNumber_Multiply(left_ptr, right_ptr),
-                    "/" => PyNumber_TrueDivide(left_ptr, right_ptr),
-                    "+" => PyNumber_Add(left_ptr, right_ptr),
-                    "-" => PyNumber_Subtract(left_ptr, right_ptr),
-                    _ => panic!("unknown binary op"),
-                },
-            ))
+            let result_ptr = match self.string.as_str() {
+                "**" | "^" => PyNumber_Power(left_ptr, right_ptr, none_ptr),
+                "*" | "" => PyNumber_Multiply(left_ptr, right_ptr),
+                "/" => PyNumber_TrueDivide(left_ptr, right_ptr),
+                "+" => PyNumber_Add(left_ptr, right_ptr),
+                "-" => PyNumber_Subtract(left_ptr, right_ptr),
+                _ => panic!("unknown binary op"),
+            };
+
+            return PyObject::from_owned_ptr_or_err(py, result_ptr);
         }
     }
 
     fn unary(&self, py: Python, left: PyObject) -> PyResult<PyObject> {
         let left_ptr = left.as_ptr();
-
         unsafe {
-            Ok(PyObject::from_owned_ptr(
+            return PyObject::from_owned_ptr_or_err(
                 py,
                 match self.string.as_str() {
                     "+" => PyNumber_Positive(left_ptr),
                     "-" => PyNumber_Negative(left_ptr),
                     _ => panic!("unknown unary op"),
                 },
-            ))
+            );
         }
     }
 }
@@ -333,12 +339,13 @@ fn parse_tokens(
         index += 1;
     }
 
-    let done = result.unwrap();
-
-    return Ok(ParseStep {
-        right: done,
-        index: index,
-    });
+    return match result {
+        Some(value) => Ok(ParseStep {
+            right: value,
+            index: index,
+        }),
+        None => Err(PyValueError::new_err("no result?")),
+    };
 }
 
 #[pyfunction]
