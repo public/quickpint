@@ -23,7 +23,6 @@ def unpatch():
     pint.registry.build_eval_tree = _original_build_eval_tree
     pint.util.build_eval_tree = _original_build_eval_tree
 
-
 __all__ = [
     "build_eval_tree"
 ]

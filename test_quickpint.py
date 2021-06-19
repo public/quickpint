@@ -22,7 +22,7 @@ def quick():
     importlib.reload(pint)
 
 
-def test_quickpint_fast(quick, benchmark):
+def test_quickpint_fast_benchmark(quick, benchmark):
     registry = pint.UnitRegistry()
 
     units = ("meter", "kilometer", "second", "minute", "angstrom")
@@ -35,7 +35,7 @@ def test_quickpint_fast(quick, benchmark):
     benchmark(_test)
 
 
-def test_quickpint_slow(benchmark):
+def test_quickpint_slow_benchmark(benchmark):
     registry = pint.UnitRegistry()
 
     units = ("meter", "kilometer", "second", "minute", "angstrom")
@@ -52,7 +52,7 @@ def test_quickpint_slow(benchmark):
 def _expression(draw):
     operator = one_of(just("-") | just("+") | just("*") | just("/") | just("**"))
 
-    values = draw(lists(integers(min_value=-8, max_value=8), min_size=1, max_size=16))
+    values = draw(lists(floats(), min_size=1, max_size=16))
 
     new_values = []
 
@@ -65,30 +65,34 @@ def _expression(draw):
 
 @given(_expression())
 def test_random_expressions(expression):
-    print("expression=", expression)
-    assert len(expression) < 100
     tokens = list(tokenizer(expression))
 
     def eval(token):
         value = float(token.string)
 
         if value > 0:
-            return min(2**32, value)
+            return min(2 ** 64, value)
         else:
-            return max(-2*32, value)
+            return max(-2 * 64, value)
 
     try:
         slow_exc = None
-        slow_parse = pint.pint_eval.build_eval_tree(tokens).evaluate(eval)
+        slow_root = pint.pint_eval.build_eval_tree(tokens)
+        slow_eval = slow_root.evaluate(eval)
     except Exception as exc:
-        slow_parse = None
+        slow_eval = None
         slow_exc = str(exc)
 
     try:
         fast_exc = None
-        fast_parse = quickpint.build_eval_tree(tokens).evaluate(eval)
+        fast_root = quickpint.build_eval_tree(tokens)
+        fast_eval = fast_root.evaluate(eval)
     except Exception as exc:
-        fast_parse = None
+        fast_eval = None
         fast_exc = str(exc)
 
-    assert slow_exc == fast_exc and (slow_parse == fast_parse or (isnan(slow_parse) and isnan(fast_parse)))
+    if slow_exc or fast_exc:
+        assert slow_exc == fast_exc
+    else:
+        assert slow_eval == fast_eval or (isnan(slow_eval) and isnan(fast_eval))
+        assert slow_root.to_string() == fast_root.to_string()

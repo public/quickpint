@@ -1,3 +1,4 @@
+use core::panic;
 use pyo3::exceptions::PyValueError;
 use pyo3::ffi::PyFloat_Type;
 use pyo3::ffi::PyNumber_Absolute;
@@ -9,13 +10,13 @@ use pyo3::ffi::PyNumber_Power;
 use pyo3::ffi::PyNumber_Subtract;
 use pyo3::ffi::PyNumber_TrueDivide;
 use pyo3::ffi::Py_None;
-use pyo3::prelude::*;
 use pyo3::types::PyFloat;
 use pyo3::types::PyList;
 use pyo3::types::PyString;
 use pyo3::types::PyTuple;
 use pyo3::wrap_pyfunction;
 use pyo3::AsPyPointer;
+use pyo3::{prelude::*, PyObjectProtocol};
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::fmt;
@@ -30,38 +31,41 @@ struct EvalTreeNode {
 }
 
 impl fmt::Display for EvalTreeNode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.right {
-            Some(r) => match &self.left {
-                Some(l) => {
-                    return write!(
-                        f,
-                        "({comps})",
-                        comps = match &self.operator {
-                            Some(op) => vec![l.to_string(), op.string.clone(), r.to_string()],
-                            None => vec![l.to_string(), r.to_string()],
-                        }
-                        .join(" ")
-                    )
-                }
-                None => return Err(std::fmt::Error),
-            },
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        let parts = match self {
+            EvalTreeNode {
+                left: Some(l),
+                operator: Some(op),
+                right: Some(r),
+            } => vec![l.to_string(), op.string.clone(), r.to_string()],
 
-            None if self.operator.is_some() => {
-                let op = self.operator.as_ref().unwrap();
-                let comps = match &self.left {
-                    Some(l) => vec![op.string.clone(), l.to_string()],
-                    None => vec![op.string.clone()],
-                };
+            EvalTreeNode {
+                left: Some(l),
+                operator: None,
+                right: Some(r),
+            } => vec![l.to_string(), r.to_string()],
 
-                return write!(f, "{comps}", comps = comps.join(" "));
-            }
+            EvalTreeNode {
+                left: Some(l),
+                operator: Some(op),
+                right: None,
+            } => vec![op.string.clone(), l.to_string()],
 
-            _ => {
-                let op = self.operator.as_ref().unwrap();
-                return write!(f, "{value}", value = op.string.clone());
-            }
-        }
+            EvalTreeNode {
+                left: None,
+                operator: Some(op),
+                right: None,
+            } => vec![op.string.clone()],
+
+            _ => panic!("unexpected tree node"),
+        };
+
+        let value = parts.join(" ");
+
+        return match parts.len() {
+            1 => write!(out, "{value}", value=value),
+            _ => write!(out, "({value})", value=value),
+        };
     }
 }
 
@@ -94,6 +98,10 @@ impl EvalTreeNode {
             _ => Err(PyValueError::new_err("unable to evaluate tree")),
         };
     }
+
+    fn to_string(&self) -> PyResult<String> {
+        return Ok(ToString::to_string(&self));
+    }
 }
 
 #[derive(Clone)]
@@ -107,13 +115,6 @@ impl Token {
     fn binary(&self, py: Python, left: PyObject, right: PyObject) -> PyResult<PyObject> {
         let left_ptr = left.as_ptr();
         let right_ptr = right.as_ptr();
-
-        println!(
-            "binop: {left} {op} {right}",
-            left = left,
-            op = self.string,
-            right = right
-        );
 
         unsafe {
             let none_ptr = Py_None();
@@ -246,7 +247,7 @@ fn parse_tokens(
                     let op_priority = op_priority(token.string.as_str());
 
                     if result.is_some() {
-                        if op_priority < prev_op_priority
+                        if op_priority <= prev_op_priority
                             && token.string != "**"
                             && token.string != "^"
                         {
