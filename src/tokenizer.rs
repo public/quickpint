@@ -1,4 +1,4 @@
-use std::convert::{Infallible, TryFrom};
+use std::convert::{TryFrom};
 
 use pyo3::{exceptions::PyValueError, prelude::*, types::{PyFloat, PyLong}};
 use rustpython_parser::token::Tok;

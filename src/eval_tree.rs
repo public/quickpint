@@ -7,7 +7,7 @@ use pyo3::ffi::PyNumber_Power;
 use pyo3::ffi::PyNumber_Subtract;
 use pyo3::ffi::PyNumber_TrueDivide;
 use pyo3::ffi::Py_None;
-use pyo3::types::PyList;
+
 use pyo3::prelude::*;
 use core::fmt;
 use core::panic;
@@ -17,7 +17,7 @@ use pyo3::exceptions::{PyValueError};
 use pyo3::{AsPyPointer};
 use crate::tokenizer::TokenInfo;
 use crate::tokenizer::TokenType;
-use std::convert::TryFrom;
+
 
 #[pyclass]
 pub struct EvalTreeNode {
