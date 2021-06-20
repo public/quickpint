@@ -1,17 +1,12 @@
-from hypothesis.strategies._internal.core import composite, recursive
-from hypothesis.strategies._internal.numbers import integers
 import quickpint
 import pint
-from math import exp, isnan
+from math import isnan
 from pint.compat import tokenizer
 import pint.pint_eval
 import pytest
 import importlib
-from io import BytesIO
 from hypothesis import given
-from hypothesis.strategies import just, one_of, floats, lists
-
-import tokenize
+from hypothesis.strategies import just, one_of, floats, lists, composite
 
 
 @pytest.fixture
@@ -96,3 +91,14 @@ def test_random_expressions(expression):
     else:
         assert slow_eval == fast_eval or (isnan(slow_eval) and isnan(fast_eval))
         assert slow_root.to_string() == fast_root.to_string()
+
+
+@given(_expression())
+def test_tokenizer(expression):
+    slow_tokens = list(tokenizer(expression))
+    fast_tokens = quickpint.tokenizer(expression)
+
+    slow_str = pint.pint_eval.build_eval_tree(slow_tokens).to_string()
+    fast_str = pint.pint_eval.build_eval_tree(fast_tokens).to_string()
+
+    assert slow_str == fast_str
