@@ -88,7 +88,8 @@ impl EvalTreeNode {
                 operator: Some(op),
                 right: _,
             } => {
-                Ok(py_callback.call1((op.clone(),))?.into())
+                let args: (TokenInfo,) = (op.clone(),);
+                Ok(py_callback.call1(args)?.into())
             }
             _ => Err(PyValueError::new_err("unable to evaluate tree")),
         };
@@ -169,7 +170,7 @@ pub fn parse_tokens(
     while index < len_tokens {
         let token = &tokens[index as usize];
 
-        match token.type_id {
+        match token.r#type {
             TokenType::OP => match token.string.as_str() {
                 ")" => match prev_op {
                     None => return Err(PyValueError::new_err("unopened parenthesis")),

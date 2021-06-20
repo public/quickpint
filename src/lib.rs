@@ -9,6 +9,7 @@ use crate::tokenizer::*;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
+use pyo3::types::PyTuple;
 use pyo3::wrap_pyfunction;
 
 use rustpython_parser::lexer::make_tokenizer;
@@ -29,7 +30,7 @@ pub fn tokenizer(_py: Python, expression: &str) -> PyResult<Vec<TokenInfo>> {
     }
 
     tokens.push(TokenInfo {
-        type_id: TokenType::ENDMARKER,
+        r#type: TokenType::ENDMARKER,
         string: "".into(),
     });
 
@@ -38,11 +39,11 @@ pub fn tokenizer(_py: Python, expression: &str) -> PyResult<Vec<TokenInfo>> {
 
 #[pyfunction]
 fn build_eval_tree(py: Python, py_tokens: &PyList) -> PyResult<EvalTreeNode> {
-    let mut tokens = Vec::new();
+    let mut tokens: Vec<TokenInfo> = Vec::new();
     tokens.reserve(py_tokens.len());
 
     for py_token in py_tokens {
-        tokens.push(py_token.extract()?);
+        tokens.push(TokenInfo::try_from(py_token)?);
     }
 
     return Ok(*parse_tokens(py, &tokens, 0, 0, None)?.right);

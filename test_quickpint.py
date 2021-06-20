@@ -47,7 +47,7 @@ def test_quickpint_slow_benchmark(benchmark):
 def _expression(draw):
     operator = one_of(just("-") | just("+") | just("*") | just("/") | just("**"))
 
-    values = draw(lists(floats(), min_size=1, max_size=16))
+    values = draw(lists(floats(min_value=-1000, max_value=1000), min_size=1, max_size=16))
 
     new_values = []
 
@@ -60,15 +60,16 @@ def _expression(draw):
 
 @given(_expression())
 def test_random_expressions(expression):
+    print(expression)
     tokens = list(tokenizer(expression))
 
     def eval(token):
         value = float(token.string)
 
         if value > 0:
-            return min(2 ** 64, value)
+            return min(2 ** 32, value)
         else:
-            return max(-2 * 64, value)
+            return max(-2 * 32, value)
 
     try:
         slow_exc = None
